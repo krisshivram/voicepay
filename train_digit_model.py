@@ -91,7 +91,16 @@ weight_specs = []
 
 for layer in model.layers:
     for w in layer.weights:
-        name = w.name
+        # BUG FIX: on Keras 3 (TF >= 2.16), w.name is just the bare variable
+        # name (e.g. "kernel", "bias") — NOT a scoped name like
+        # "conv2d_3/kernel:0". Every Conv2D/Dense layer has a "kernel" and a
+        # "bias", so using w.name directly causes duplicate names across
+        # layers, which silently overwrite each other in the TF.js weight
+        # map at load time. Scope the name with the layer name to keep it
+        # unique.
+        short_name = w.name.split('/')[-1].split(':')[0]
+        name = f"{layer.name}/{short_name}"
+
         arr = w.numpy().astype(np.float32)
         shape = list(arr.shape)
 
@@ -113,33 +122,26 @@ weights_path = os.path.join(output_dir, weights_filename)
 with open(weights_path, 'wb') as f:
     f.write(weight_data)
 
-# Build the TF.js model.json topology
-def build_tfjs_topology(model):
-    """Convert Keras model config to TF.js layers format."""
-    config = model.get_config()
+# BUG FIX: Keras 3's get_config() output has two quirks TF.js's layer
+# deserializer doesn't understand:
+#   1. InputLayer config uses "batch_shape" instead of the older
+#      "batch_input_shape" key TF.js expects.
+#   2. "dtype" can be a policy dict (e.g. {"class_name": "DTypePolicy", ...})
+#      instead of a plain string like "float32".
+# Without this, tf.loadLayersModel() can throw while parsing the topology.
+def sanitize_layer_config(cfg):
+    cfg = dict(cfg)
 
-    tfjs_layers = []
-    for i, layer_cfg in enumerate(config['layers']):
-        lc = layer_cfg.copy()
-        cls_name = lc['class_name']
-        cfg = lc['config'].copy()
+    if 'batch_shape' in cfg:
+        cfg['batch_input_shape'] = cfg.pop('batch_shape')
 
-        tfjs_layer = {
-            'class_name': cls_name,
-            'config': cfg,
-        }
+    dtype = cfg.get('dtype')
+    if isinstance(dtype, dict):
+        cfg['dtype'] = dtype.get('config', {}).get('name', 'float32')
+    elif dtype is not None and not isinstance(dtype, str):
+        cfg['dtype'] = 'float32'
 
-        if i == 0:
-            # First layer gets inbound_nodes
-            tfjs_layer['inbound_nodes'] = []
-        else:
-            # Sequential model: each layer connects to previous
-            prev_name = config['layers'][i-1]['config']['name']
-            tfjs_layer['inbound_nodes'] = [[[prev_name, 0, 0, {}]]]
-
-        tfjs_layers.append(tfjs_layer)
-
-    return tfjs_layers
+    return cfg
 
 # Build model topology
 keras_config = model.get_config()
@@ -153,9 +155,13 @@ model_topology = {
     'backend': 'tensorflow'
 }
 
-# For Sequential models, just pass the config directly
+# For Sequential models, pass the config through, sanitized per-layer.
+# (Sequential's tfjs deserializer rebuilds the model by calling .add() for
+# each layer in order, so no inbound_nodes graph wiring is needed here.)
 for layer_cfg in keras_config['layers']:
-    model_topology['config']['layers'].append(layer_cfg)
+    lc = dict(layer_cfg)
+    lc['config'] = sanitize_layer_config(lc['config'])
+    model_topology['config']['layers'].append(lc)
 
 # Build the full model.json
 model_json = {
