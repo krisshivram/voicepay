@@ -1,0 +1,1847 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<meta name="description" content="VoicePay — Always-on voice payment app for blind and visually impaired users">
+<meta name="theme-color" content="#0d0b1a">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="VoicePay">
+<title>VoicePay — Always Listening</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0/dist/tf.min.js"></script>
+<style>
+/* ═══════════════════════════════════════════════════
+   DESIGN TOKENS & RESET
+═══════════════════════════════════════════════════ */
+*{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+:root{
+  --bg:#0d0b1a;--bg2:#13102a;--bg3:#1c1838;
+  --surface:#1f1c38;--surface2:#2a2650;
+  --border:#312d5c;--border2:#524da0;
+  --accent:#7c5cfc;--accent2:#a485ff;--accent3:#c8b8ff;
+  --accent-glow:rgba(124,92,252,.3);
+  --green:#00e5a0;--green-dim:#00b87d;--green-glow:rgba(0,229,160,.25);
+  --red:#ff4f7b;--red-dim:#cc2d55;
+  --amber:#ffb830;
+  --text:#f0eeff;--text2:#a8a0cc;--text3:#6a6490;
+  --r20:20px;--r14:14px;--r40:40px;
+  --font:'Outfit',sans-serif;--mono:'JetBrains Mono',monospace;
+  --spring:cubic-bezier(.34,1.56,.64,1);
+}
+html,body{height:100%;overflow:hidden}
+body{font-family:var(--font);background:var(--bg);color:var(--text);cursor:none;position:relative;overflow:hidden}
+button{font-family:var(--font);cursor:none;border:none;background:none}
+input{font-family:var(--font)}
+
+/* ═══════════════════════════════════════════════════
+   CUSTOM CURSOR
+═══════════════════════════════════════════════════ */
+#cur{position:fixed;width:14px;height:14px;background:var(--accent);border-radius:50%;pointer-events:none;z-index:9999;transform:translate(-50%,-50%);transition:width .12s,height .12s,background .15s;mix-blend-mode:screen}
+#cur2{position:fixed;width:38px;height:38px;border:1.5px solid var(--accent2);border-radius:50%;pointer-events:none;z-index:9998;transform:translate(-50%,-50%);transition:left .08s linear,top .08s linear;opacity:.4}
+body.hov #cur{width:26px;height:26px;background:var(--accent2)}
+body.tap-hov #cur{width:60px;height:60px;background:var(--accent);opacity:.5}
+
+/* ═══════════════════════════════════════════════════
+   BACKGROUND PULSE ORBS
+═══════════════════════════════════════════════════ */
+.orb{position:fixed;border-radius:50%;pointer-events:none;z-index:0;filter:blur(90px);opacity:.12}
+.orb1{width:500px;height:500px;background:var(--accent);top:-120px;right:-140px;animation:o1 14s ease-in-out infinite}
+.orb2{width:420px;height:420px;background:#5c2ffc;bottom:-120px;left:-100px;animation:o2 17s ease-in-out infinite}
+.orb3{width:280px;height:280px;background:var(--green);top:45%;left:35%;animation:o3 11s ease-in-out infinite;opacity:.07}
+@keyframes o1{0%,100%{transform:translate(0,0)}50%{transform:translate(-40px,50px)}}
+@keyframes o2{0%,100%{transform:translate(0,0)}50%{transform:translate(50px,-40px)}}
+@keyframes o3{0%,100%{transform:translate(0,0)}50%{transform:translate(-30px,30px)}}
+
+/* ═══════════════════════════════════════════════════
+   VOICE INDICATOR BAR — always visible, shows listening state
+═══════════════════════════════════════════════════ */
+#voiceBar{
+  position:fixed;top:0;left:0;right:0;z-index:800;
+  background:var(--bg2);border-bottom:1px solid var(--border);
+  padding:10px 20px;display:flex;align-items:center;gap:12px;
+  min-height:52px;
+}
+.vb-orb{
+  width:28px;height:28px;border-radius:50%;flex-shrink:0;
+  background:var(--surface2);border:2px solid var(--border2);
+  display:flex;align-items:center;justify-content:center;font-size:12px;
+  transition:all .3s;
+}
+.vb-orb.listening{
+  background:var(--green-dim);border-color:var(--green);
+  animation:voiceOrb 1.2s ease-out infinite;
+}
+.vb-orb.speaking{background:var(--accent);border-color:var(--accent2);animation:voiceOrb 0.6s ease-out infinite}
+.vb-orb.error{background:var(--red-dim);border-color:var(--red)}
+@keyframes voiceOrb{0%{box-shadow:0 0 0 0 rgba(0,229,160,.6)}70%{box-shadow:0 0 0 14px rgba(0,229,160,0)}100%{box-shadow:0 0 0 0 rgba(0,229,160,0)}}
+.vb-text{font-size:13px;font-weight:600;color:var(--text2);flex:1;line-height:1.3}
+.vb-transcript{font-size:12px;color:var(--accent3);font-style:italic;min-height:16px;transition:all .2s}
+.vb-col{display:flex;flex-direction:column;flex:1;gap:2px}
+
+/* ═══════════════════════════════════════════════════
+   SCREEN SYSTEM
+═══════════════════════════════════════════════════ */
+#appRoot{
+  position:fixed;top:52px;left:0;right:0;bottom:72px;
+  overflow-y:auto;overflow-x:hidden;
+  scrollbar-width:thin;scrollbar-color:var(--border) transparent;
+  z-index:1;
+}
+.screen{
+  display:none;flex-direction:column;align-items:center;
+  min-height:100%;padding:16px 18px 30px;
+  animation:scIn .35s ease;
+}
+.screen.active{display:flex}
+@keyframes scIn{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:translateY(0)}}
+
+/* ═══════════════════════════════════════════════════
+   BOTTOM NAV
+═══════════════════════════════════════════════════ */
+#botNav{
+  position:fixed;bottom:0;left:0;right:0;z-index:700;
+  background:var(--bg2);border-top:1px solid var(--border);
+  display:flex;align-items:center;justify-content:space-around;
+  padding:8px 0 max(8px,env(safe-area-inset-bottom));height:72px;
+}
+.bn{
+  display:flex;flex-direction:column;align-items:center;gap:3px;
+  padding:4px 16px;border-radius:12px;transition:all .2s;cursor:none;
+}
+.bn:hover,.bn.on{background:rgba(124,92,252,.12)}
+.bn-ico{font-size:20px;line-height:1;color:var(--text3);transition:color .2s}
+.bn-lbl{font-size:10px;font-weight:700;color:var(--text3);letter-spacing:.4px;transition:color .2s}
+.bn.on .bn-ico,.bn.on .bn-lbl{color:var(--accent2)}
+
+/* ═══════════════════════════════════════════════════
+   SHARED COMPONENTS
+═══════════════════════════════════════════════════ */
+.nav-row{width:100%;max-width:460px;display:flex;align-items:center;gap:14px;padding-bottom:14px}
+.back-btn{
+  width:42px;height:42px;border-radius:50%;background:var(--surface);
+  border:1.5px solid var(--border);display:flex;align-items:center;justify-content:center;
+  font-size:18px;color:var(--text);flex-shrink:0;transition:all .2s;cursor:none;
+}
+.back-btn:hover{border-color:var(--border2);background:var(--surface2);transform:scale(1.08)}
+.pg-title{font-size:19px;font-weight:800;letter-spacing:-.4px}
+
+.card{
+  width:100%;max-width:460px;
+  background:var(--surface);border:1.5px solid var(--border);
+  border-radius:var(--r20);padding:20px;margin-bottom:14px;
+}
+.card:hover{border-color:var(--border2)}
+
+.primary-btn{
+  width:100%;max-width:460px;
+  background:var(--accent);color:#fff;border:none;border-radius:var(--r14);
+  padding:18px;font-size:17px;font-weight:800;cursor:none;
+  transition:all .22s var(--spring);font-family:var(--font);margin-bottom:10px;
+}
+.primary-btn:hover{background:var(--accent2);transform:translateY(-2px);box-shadow:0 8px 28px var(--accent-glow)}
+.primary-btn:active{transform:scale(.98)}
+.primary-btn:disabled{opacity:.3;cursor:not-allowed;transform:none;box-shadow:none}
+.ghost-btn{
+  width:100%;max-width:460px;
+  background:var(--surface);color:var(--text2);
+  border:1.5px solid var(--border);border-radius:var(--r14);
+  padding:15px;font-size:15px;font-weight:700;cursor:none;
+  transition:all .2s;font-family:var(--font);margin-bottom:10px;
+}
+.ghost-btn:hover{border-color:var(--border2);background:var(--surface2)}
+.ghost-btn.danger{color:var(--red);border-color:rgba(255,79,123,.3)}
+.ghost-btn.danger:hover{background:rgba(255,79,123,.08)}
+
+/* ═══════════════════════════════════════════════════
+   HOME SCREEN
+═══════════════════════════════════════════════════ */
+.home-top{width:100%;max-width:460px;display:flex;align-items:center;justify-content:space-between;padding-bottom:14px}
+.logo{display:flex;align-items:center;gap:10px}
+.logo-box{width:34px;height:34px;background:var(--accent);border-radius:10px;display:flex;align-items:center;justify-content:center;font-size:14px;font-weight:900;color:#fff}
+.logo-txt{font-size:19px;font-weight:900;letter-spacing:-.5px}
+.top-av{width:38px;height:38px;border-radius:50%;background:linear-gradient(135deg,var(--accent),var(--accent2));display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:800;color:#fff;border:2px solid var(--border2);transition:transform .2s;cursor:none}
+.top-av:hover{transform:scale(1.1)}
+
+.balance-card{
+  width:100%;max-width:460px;
+  background:linear-gradient(140deg,var(--accent) 0%,#5533e8 55%,#3a1a8f 100%);
+  border-radius:24px;padding:24px 24px 20px;position:relative;overflow:hidden;
+  margin-bottom:16px;box-shadow:0 12px 40px var(--accent-glow);
+}
+.balance-card::before{content:'';position:absolute;top:-60px;right:-60px;width:200px;height:200px;background:rgba(255,255,255,.07);border-radius:50%}
+.balance-card::after{content:'';position:absolute;bottom:-70px;left:-40px;width:240px;height:240px;background:rgba(255,255,255,.04);border-radius:50%}
+.bal-tag{display:inline-flex;align-items:center;gap:5px;background:rgba(255,255,255,.15);border:1px solid rgba(255,255,255,.25);border-radius:20px;padding:4px 10px;font-size:11px;font-weight:700;color:rgba(255,255,255,.9);margin-bottom:12px;letter-spacing:.3px}
+.bal-lbl{font-size:12px;opacity:.7;letter-spacing:.5px;text-transform:uppercase;color:#fff;margin-bottom:4px}
+.bal-amt{font-size:42px;font-weight:900;letter-spacing:-3px;color:#fff;font-family:var(--mono);margin-bottom:2px}
+.bal-sub{font-size:12px;opacity:.55;color:#fff;font-family:var(--mono);letter-spacing:2px}
+
+.qa-grid{width:100%;max-width:460px;display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:18px}
+.qa{
+  background:var(--surface);border:1.5px solid var(--border);border-radius:var(--r20);
+  padding:14px 6px 12px;display:flex;flex-direction:column;align-items:center;gap:7px;
+  cursor:none;transition:all .22s var(--spring);
+}
+.qa:hover{border-color:var(--border2);background:var(--surface2);transform:translateY(-4px);box-shadow:0 8px 22px var(--accent-glow)}
+.qa:active{transform:scale(.95)}
+.qa-ic{width:44px;height:44px;border-radius:13px;display:flex;align-items:center;justify-content:center;font-size:20px}
+.qa-lb{font-size:10px;font-weight:700;color:var(--text3);letter-spacing:.3px}
+
+.sec-hdr{width:100%;max-width:460px;display:flex;align-items:center;justify-content:space-between;margin-bottom:10px}
+.sec-ttl{font-size:15px;font-weight:800;letter-spacing:-.3px}
+.sec-lnk{font-size:12px;color:var(--accent2);font-weight:700;cursor:none}
+.sec-lnk:hover{color:var(--accent3)}
+
+.txn-list{width:100%;max-width:460px;display:flex;flex-direction:column;gap:8px}
+.txn{
+  background:var(--surface);border:1.5px solid var(--border);border-radius:var(--r20);
+  padding:13px 16px;display:flex;align-items:center;gap:12px;
+  cursor:none;transition:all .2s;
+}
+.txn:hover{border-color:var(--border2);background:var(--surface2);transform:translateX(5px);box-shadow:0 4px 16px var(--accent-glow)}
+.txn-av{width:44px;height:44px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:14px;flex-shrink:0}
+.txn-name{font-size:14px;font-weight:700;margin-bottom:2px}
+.txn-note{font-size:11px;color:var(--text3)}
+.txn-info{flex:1;min-width:0}
+.txn-amt{font-size:15px;font-weight:800;font-family:var(--mono);white-space:nowrap}
+.cr{color:var(--green)}.dr{color:var(--red)}
+
+/* ═══════════════════════════════════════════════════
+   SEND / AMOUNT SCREEN
+═══════════════════════════════════════════════════ */
+.rec-chip{
+  width:100%;max-width:460px;
+  background:var(--surface2);border:1.5px solid var(--border2);
+  border-radius:var(--r40);padding:12px 18px;
+  display:flex;align-items:center;gap:12px;margin-bottom:14px;
+}
+.rec-av{width:38px;height:38px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:13px;flex-shrink:0}
+.rec-name{font-size:15px;font-weight:800}
+.rec-upi{font-size:11px;color:var(--text3);font-family:var(--mono)}
+.rec-change{font-size:12px;color:var(--accent2);font-weight:700;cursor:none;margin-left:auto}
+
+.amt-card{width:100%;max-width:460px;background:var(--surface);border:1.5px solid var(--border);border-radius:24px;padding:28px;text-align:center;margin-bottom:14px}
+.amt-big{font-size:54px;font-weight:900;color:var(--text);letter-spacing:-4px;font-family:var(--mono);min-height:68px;line-height:1.1;transition:color .2s}
+.amt-big.live{color:var(--accent2)}
+.amt-cur{display:inline-block;width:3px;height:50px;background:var(--accent2);vertical-align:middle;margin-left:2px;animation:blink .8s infinite}
+@keyframes blink{0%,49%{opacity:1}50%,100%{opacity:0}}
+.amt-words{font-size:13px;color:var(--text3);margin-top:6px;min-height:18px}
+
+.numpad{width:100%;max-width:460px;display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:12px}
+.nk{
+  background:var(--surface);border:1.5px solid var(--border);border-radius:var(--r14);
+  padding:19px;font-size:22px;font-weight:700;text-align:center;cursor:none;
+  transition:all .15s;font-family:var(--mono);color:var(--text);
+}
+.nk:hover{border-color:var(--border2);background:var(--surface2);transform:scale(1.04);box-shadow:0 4px 14px var(--accent-glow)}
+.nk:active{transform:scale(.95)}
+.nk.del{color:var(--red);font-size:18px}
+.nk.del:hover{border-color:var(--red-dim);background:rgba(255,79,123,.08)}
+
+/* ═══════════════════════════════════════════════════
+   PIN SCREEN — TAP METHOD
+═══════════════════════════════════════════════════ */
+.pin-hero{
+  width:100%;max-width:460px;
+  background:linear-gradient(135deg,var(--surface2),var(--surface));
+  border:1.5px solid var(--border2);border-radius:24px;padding:20px;margin-bottom:16px;
+}
+.pin-hero-row{display:flex;align-items:center;gap:12px;margin-bottom:14px}
+.pin-icon-box{width:50px;height:50px;background:linear-gradient(135deg,var(--accent),var(--accent2));border-radius:14px;display:flex;align-items:center;justify-content:center;font-size:22px;flex-shrink:0}
+.pin-title{font-size:18px;font-weight:800;margin-bottom:3px}
+.pin-sub{font-size:12px;color:var(--text2);line-height:1.5}
+
+.method-tabs{display:flex;gap:8px}
+.mtab{
+  flex:1;padding:9px;border-radius:10px;
+  border:1.5px solid var(--border);background:var(--bg3);
+  font-size:13px;font-weight:700;color:var(--text3);cursor:none;transition:all .2s;text-align:center;
+}
+.mtab:hover{border-color:var(--border2);color:var(--text)}
+.mtab.on{border-color:var(--accent);background:rgba(124,92,252,.15);color:var(--accent2)}
+
+.pin-dots{width:100%;max-width:460px;display:flex;justify-content:center;gap:16px;margin-bottom:16px;padding:8px 0}
+.pd{width:18px;height:18px;border-radius:50%;border:2.5px solid var(--border2);background:transparent;transition:all .3s}
+.pd.fill{background:var(--accent2);border-color:var(--accent2);transform:scale(1.2)}
+.pd.ok{background:var(--green);border-color:var(--green);transform:scale(1.2)}
+.pd.fail{background:var(--red);border-color:var(--red);animation:shk .4s}
+@keyframes shk{0%,100%{transform:translateX(0)}25%{transform:translateX(-7px)}75%{transform:translateX(7px)}}
+
+/* Classic PIN */
+.cpin-dots{width:100%;max-width:460px;display:flex;justify-content:center;gap:18px;margin-bottom:18px;padding:8px 0}
+.cpd{width:20px;height:20px;border-radius:50%;border:2.5px solid var(--border2);background:transparent;transition:all .2s}
+.cpd.on{background:var(--accent2);border-color:var(--accent2);transform:scale(1.15)}
+.cpin-pad{width:100%;max-width:460px;display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:12px}
+.cpk{
+  background:var(--surface);border:1.5px solid var(--border);border-radius:var(--r14);
+  padding:16px 8px;display:flex;flex-direction:column;align-items:center;gap:2px;cursor:none;transition:all .15s;
+}
+.cpk:hover{border-color:var(--border2);background:var(--surface2);transform:scale(1.04)}
+.cpk:active{transform:scale(.95)}
+.cpk-d{font-size:24px;font-weight:700;font-family:var(--mono);line-height:1}
+.cpk-a{font-size:9px;color:var(--text3);letter-spacing:1.5px;font-weight:600}
+.cpk.del{color:var(--red)}
+
+/* ═══════════════════════════════════════════════════
+   FULLSCREEN HANDWRITING OVERLAY
+═══════════════════════════════════════════════════ */
+#drawOverlay{
+  position:fixed;inset:0;z-index:3000;
+  background:#000;display:none;flex-direction:column;
+  align-items:center;justify-content:flex-start;
+  user-select:none;-webkit-user-select:none;
+  animation:drawFadeIn .35s ease;
+}
+#drawOverlay.active{display:flex}
+@keyframes drawFadeIn{from{opacity:0}to{opacity:1}}
+
+/* Top bar in overlay */
+.do-top{
+  width:100%;padding:18px 20px 12px;display:flex;align-items:center;justify-content:space-between;
+  z-index:2;
+}
+.do-back{
+  width:40px;height:40px;border-radius:50%;background:rgba(255,255,255,.08);
+  border:1.5px solid rgba(255,255,255,.15);display:flex;align-items:center;
+  justify-content:center;font-size:18px;color:#fff;cursor:pointer;
+  transition:all .2s;flex-shrink:0;
+}
+.do-back:hover{background:rgba(255,255,255,.15);border-color:rgba(255,255,255,.3)}
+.do-title{font-size:16px;font-weight:700;color:rgba(255,255,255,.7);letter-spacing:.3px}
+.do-clear{
+  padding:8px 16px;border-radius:20px;background:rgba(255,79,123,.12);
+  border:1px solid rgba(255,79,123,.3);font-size:12px;font-weight:700;
+  color:var(--red);cursor:pointer;transition:all .2s;
+}
+.do-clear:hover{background:rgba(255,79,123,.2)}
+
+/* PIN progress dots */
+.do-pin-progress{
+  display:flex;gap:14px;padding:14px 0 8px;
+}
+.do-pdot{
+  width:42px;height:42px;border-radius:12px;
+  border:2px solid rgba(255,255,255,.15);background:rgba(255,255,255,.04);
+  display:flex;align-items:center;justify-content:center;
+  font-size:22px;font-weight:900;color:transparent;
+  font-family:var(--mono);transition:all .3s var(--spring);
+}
+.do-pdot.current{
+  border-color:var(--accent);background:rgba(124,92,252,.12);
+  box-shadow:0 0 20px rgba(124,92,252,.3);
+  animation:dotPulse 1.5s ease-in-out infinite;
+}
+.do-pdot.filled{
+  border-color:var(--green);background:rgba(0,229,160,.12);
+  color:var(--green);
+}
+.do-pdot.wrong{
+  border-color:var(--red);background:rgba(255,79,123,.12);
+  color:var(--red);animation:shk .4s;
+}
+@keyframes dotPulse{0%,100%{box-shadow:0 0 20px rgba(124,92,252,.3)}50%{box-shadow:0 0 30px rgba(124,92,252,.5)}}
+
+/* Instruction text */
+.do-instruction{
+  font-size:15px;color:rgba(255,255,255,.5);padding:6px 0 10px;
+  text-align:center;transition:all .3s;
+}
+
+/* The drawing canvas wrapper */
+.do-canvas-wrap{
+  flex:1;width:100%;position:relative;display:flex;
+  align-items:center;justify-content:center;
+  touch-action:none;
+}
+#hwCanvas{
+  width:100%;height:100%;touch-action:none;cursor:crosshair;
+  position:absolute;inset:0;
+}
+
+/* Recognized digit popup */
+.do-result{
+  position:fixed;top:50%;left:50%;
+  transform:translate(-50%,-50%) scale(0);
+  font-size:120px;font-weight:900;color:var(--accent2);
+  font-family:var(--mono);z-index:3001;
+  text-shadow:0 0 60px rgba(124,92,252,.5),0 0 120px rgba(124,92,252,.2);
+  pointer-events:none;opacity:0;transition:all .35s var(--spring);
+}
+.do-result.show{
+  transform:translate(-50%,-50%) scale(1);opacity:1;
+}
+.do-result.correct{color:var(--green);text-shadow:0 0 60px rgba(0,229,160,.5)}
+.do-result.wrong{color:var(--red);text-shadow:0 0 60px rgba(255,79,123,.5)}
+
+/* Confidence bar */
+.do-conf-wrap{
+  width:100%;padding:0 30px;position:absolute;bottom:24px;
+  display:flex;flex-direction:column;align-items:center;gap:6px;
+}
+.do-conf-label{
+  font-size:11px;color:rgba(255,255,255,.35);font-weight:600;letter-spacing:.5px;
+}
+.do-conf-bar{
+  width:100%;max-width:300px;height:4px;background:rgba(255,255,255,.08);
+  border-radius:4px;overflow:hidden;
+}
+.do-conf-fill{
+  height:100%;background:var(--accent);border-radius:4px;
+  transition:width .4s ease;
+  width:0;
+}
+
+/* Processing spinner */
+.do-processing{
+  position:fixed;top:50%;left:50%;
+  transform:translate(-50%,-50%);
+  width:50px;height:50px;border-radius:50%;
+  border:3px solid rgba(124,92,252,.2);
+  border-top-color:var(--accent);
+  animation:spin .8s linear infinite;
+  display:none;z-index:3001;
+}
+.do-processing.show{display:block}
+@keyframes spin{to{transform:translate(-50%,-50%) rotate(360deg)}}
+
+/* ═══════════════════════════════════════════════════
+   REVIEW & SUCCESS
+═══════════════════════════════════════════════════ */
+.review-amt{font-size:52px;font-weight:900;color:var(--accent2);font-family:var(--mono);text-align:center;letter-spacing:-3px;margin-bottom:6px}
+.review-to{font-size:14px;color:var(--text2);text-align:center;margin-bottom:18px}
+.rrow{display:flex;justify-content:space-between;align-items:center;padding:11px 0;border-bottom:1px solid var(--border)}
+.rrow:last-child{border:none}
+.rk{font-size:13px;color:var(--text3)}
+.rv{font-size:14px;font-weight:700;font-family:var(--mono)}
+
+.success-wrap{width:100%;max-width:460px;display:flex;flex-direction:column;align-items:center;padding-top:30px}
+.success-ring{
+  width:100px;height:100px;border-radius:50%;
+  background:linear-gradient(135deg,var(--green-dim),var(--green));
+  display:flex;align-items:center;justify-content:center;margin-bottom:22px;
+  animation:sring .5s var(--spring);box-shadow:0 0 40px var(--green-glow);font-size:48px;color:#fff;
+}
+@keyframes sring{from{transform:scale(0);opacity:0}to{transform:scale(1);opacity:1}}
+.success-title{font-size:28px;font-weight:900;letter-spacing:-1px;margin-bottom:6px;text-align:center}
+.success-sub{font-size:14px;color:var(--text2);text-align:center;line-height:1.5;margin-bottom:28px}
+.receipt{width:100%;background:var(--surface);border:1.5px solid var(--border);border-radius:22px;padding:22px;margin-bottom:24px}
+.rcp-row{display:flex;justify-content:space-between;align-items:center;padding:10px 0;border-bottom:1px solid var(--border)}
+.rcp-row:last-child{border:none}
+.rcp-k{font-size:13px;color:var(--text3)}
+.rcp-v{font-size:14px;font-weight:700;font-family:var(--mono)}
+.rcp-ok{color:var(--green);font-weight:800}
+
+/* ═══════════════════════════════════════════════════
+   HISTORY & PROFILE
+═══════════════════════════════════════════════════ */
+.filter-row{width:100%;max-width:460px;display:flex;gap:8px;overflow-x:auto;scrollbar-width:none;margin-bottom:14px;padding-bottom:2px}
+.filter-row::-webkit-scrollbar{display:none}
+.fpill{padding:8px 16px;border-radius:var(--r40);border:1.5px solid var(--border);background:var(--surface);font-size:12px;font-weight:700;color:var(--text2);white-space:nowrap;cursor:none;transition:all .2s;flex-shrink:0}
+.fpill:hover{border-color:var(--border2);color:var(--text)}
+.fpill.on{background:var(--accent);border-color:var(--accent);color:#fff}
+
+.profile-hero{width:100%;max-width:460px;background:var(--surface);border:1.5px solid var(--border);border-radius:24px;padding:26px;display:flex;flex-direction:column;align-items:center;margin-bottom:16px}
+.pav{width:76px;height:76px;border-radius:50%;background:linear-gradient(135deg,var(--accent),var(--accent2));display:flex;align-items:center;justify-content:center;font-size:26px;font-weight:900;color:#fff;margin-bottom:14px;border:3px solid var(--border2)}
+.p-name{font-size:21px;font-weight:800;margin-bottom:4px}
+.p-upi{font-size:12px;color:var(--text3);font-family:var(--mono)}
+.p-badges{display:flex;gap:8px;margin-top:14px}
+.pbadge{padding:5px 12px;border-radius:20px;font-size:11px;font-weight:700;letter-spacing:.3px}
+.pb-v{background:rgba(0,229,160,.12);color:var(--green);border:1px solid rgba(0,229,160,.3)}
+.pb-p{background:rgba(255,184,48,.12);color:var(--amber);border:1px solid rgba(255,184,48,.3)}
+
+.slist{width:100%;max-width:460px;display:flex;flex-direction:column;gap:8px;margin-bottom:16px}
+.sitem{
+  background:var(--surface);border:1.5px solid var(--border);border-radius:var(--r20);
+  padding:15px 18px;display:flex;align-items:center;gap:14px;cursor:none;transition:all .2s;
+}
+.sitem:hover{border-color:var(--border2);background:var(--surface2);transform:translateX(4px)}
+.sico{font-size:20px;width:26px;text-align:center}
+.sinfo{flex:1}.stit{font-size:14px;font-weight:700;margin-bottom:2px}
+.ssub{font-size:11px;color:var(--text3)}.sarr{font-size:16px;color:var(--text3)}
+
+/* ═══════════════════════════════════════════════════
+   TOAST
+═══════════════════════════════════════════════════ */
+#toast{
+  position:fixed;bottom:84px;left:50%;
+  transform:translateX(-50%) translateY(14px);
+  background:var(--surface2);border:1.5px solid var(--border2);
+  border-radius:var(--r40);padding:11px 22px;
+  font-size:14px;font-weight:600;color:var(--text);
+  z-index:900;opacity:0;transition:all .3s;white-space:nowrap;
+  box-shadow:0 8px 30px rgba(0,0,0,.5);max-width:90vw;text-align:center;
+}
+#toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+
+/* ═══════════════════════════════════════════════════
+   SPLASH
+═══════════════════════════════════════════════════ */
+#splash{
+  position:fixed;inset:0;background:var(--bg);z-index:2000;
+  display:flex;flex-direction:column;align-items:center;justify-content:center;
+  transition:opacity .6s;
+}
+.spl-logo{width:80px;height:80px;background:var(--accent);border-radius:24px;display:flex;align-items:center;justify-content:center;font-size:32px;font-weight:900;color:#fff;margin-bottom:20px;animation:splBounce .6s var(--spring);box-shadow:0 0 50px var(--accent-glow)}
+@keyframes splBounce{from{transform:scale(0);opacity:0}to{transform:scale(1);opacity:1}}
+.spl-title{font-size:34px;font-weight:900;letter-spacing:-1.5px;margin-bottom:6px;animation:fadeUp .5s .2s both}
+.spl-tag{font-size:14px;color:var(--text2);text-align:center;padding:0 40px;line-height:1.5;animation:fadeUp .5s .35s both}
+.spl-bar{width:44px;height:4px;background:var(--border);border-radius:4px;margin-top:44px;overflow:hidden;animation:fadeUp .5s .5s both}
+.spl-fill{height:100%;background:var(--accent);border-radius:4px;animation:barLoad 1.8s .5s ease forwards}
+@keyframes barLoad{from{width:0}to{width:100%}}
+@keyframes fadeUp{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:translateY(0)}}
+
+/* ═══════════════════════════════════════════════════
+   VOICE COMMAND HINT OVERLAY
+═══════════════════════════════════════════════════ */
+#cmdHint{
+  position:fixed;bottom:82px;left:16px;right:16px;
+  background:var(--surface2);border:1.5px solid var(--border2);
+  border-radius:18px;padding:14px 18px;z-index:600;
+  opacity:0;transform:translateY(8px);
+  transition:all .3s ease;pointer-events:none;
+}
+#cmdHint.show{opacity:1;transform:translateY(0)}
+.cmd-hint-title{font-size:11px;font-weight:700;color:var(--accent3);letter-spacing:.5px;margin-bottom:6px}
+.cmd-list{display:flex;flex-wrap:wrap;gap:6px}
+.cmd{background:var(--bg3);border:1px solid var(--border);border-radius:8px;padding:4px 10px;font-size:11px;color:var(--text2);font-style:italic}
+
+/* sr-only */
+.sr{position:absolute;left:-9999px;width:1px;height:1px;overflow:hidden}
+
+/* mobile cursor hide */
+@media (hover:none){#cur,#cur2{display:none}}
+</style>
+</head>
+<body>
+
+<!-- ───── SPLASH ───── -->
+<div id="splash" aria-label="Loading VoicePay" role="status">
+  <div class="spl-logo" aria-hidden="true">VP</div>
+  <div class="spl-title">VoicePay</div>
+  <div class="spl-tag">Voice-first payments for everyone.<br>Always listening. Always here.</div>
+  <div class="spl-bar"><div class="spl-fill"></div></div>
+</div>
+
+<!-- BACKGROUND ORBS -->
+<div class="orb orb1" aria-hidden="true"></div>
+<div class="orb orb2" aria-hidden="true"></div>
+<div class="orb orb3" aria-hidden="true"></div>
+
+<!-- CURSOR -->
+<div id="cur" aria-hidden="true"></div>
+<div id="cur2" aria-hidden="true"></div>
+
+<!-- ───── ALWAYS-ON VOICE BAR ───── -->
+<div id="voiceBar" role="status" aria-live="polite" aria-label="Voice input status">
+  <div class="vb-orb" id="vbOrb" aria-hidden="true">🎙️</div>
+  <div class="vb-col">
+    <div class="vb-text" id="vbText">Starting voice recognition…</div>
+    <div class="vb-transcript" id="vbTranscript" aria-live="polite"></div>
+  </div>
+</div>
+
+<!-- ───── TOAST ───── -->
+<div id="toast" role="alert" aria-live="assertive"></div>
+
+<!-- ───── VOICE COMMAND HINT ───── -->
+<div id="cmdHint" aria-hidden="true">
+  <div class="cmd-hint-title">TRY SAYING</div>
+  <div class="cmd-list" id="cmdList"></div>
+</div>
+
+<!-- ───── FULLSCREEN HANDWRITING OVERLAY ───── -->
+<div id="drawOverlay" aria-label="Handwrite your PIN digits" role="dialog">
+  <div class="do-top">
+    <button class="do-back" onclick="closeDrawOverlay()" aria-label="Back">←</button>
+    <span class="do-title" id="doTitle">Draw Digit 1 of 4</span>
+    <button class="do-clear" onclick="clearHwCanvas()" aria-label="Clear canvas">✕ Clear</button>
+  </div>
+  <div class="do-pin-progress" id="doPinProgress">
+    <div class="do-pdot current" id="doPdot0"></div>
+    <div class="do-pdot" id="doPdot1"></div>
+    <div class="do-pdot" id="doPdot2"></div>
+    <div class="do-pdot" id="doPdot3"></div>
+  </div>
+  <div class="do-instruction" id="doInstruction">Draw a digit with your finger or mouse</div>
+  <div class="do-canvas-wrap" id="doCanvasWrap">
+    <canvas id="hwCanvas"></canvas>
+    <div class="do-conf-wrap">
+      <span class="do-conf-label" id="doConfLabel"></span>
+      <div class="do-conf-bar"><div class="do-conf-fill" id="doConfFill"></div></div>
+    </div>
+  </div>
+  <div class="do-result" id="doResult"></div>
+  <div class="do-processing" id="doSpinner"></div>
+</div>
+
+<!-- ═══════════════════════════════════════════
+     APP ROOT (scrollable)
+═══════════════════════════════════════════ -->
+<div id="appRoot" role="main">
+
+<!-- ── SCREEN: HOME ── -->
+<section class="screen active" id="scHome" aria-label="Home">
+  <div class="home-top">
+    <div class="logo">
+      <div class="logo-box" aria-hidden="true">VP</div>
+      <span class="logo-txt">VoicePay</span>
+    </div>
+    <button class="top-av" onclick="goScreen('scProfile')" aria-label="Open profile">AK</button>
+  </div>
+
+  <div class="balance-card" role="region" aria-label="Account balance">
+    <div class="bal-tag">🔒 SECURE</div>
+    <div class="bal-lbl">Available Balance</div>
+    <div class="bal-amt" id="homeBal">₹24,850</div>
+    <div class="bal-sub">•••• •••• •••• 4821</div>
+  </div>
+
+  <div class="qa-grid" role="navigation" aria-label="Quick actions">
+    <button class="qa" onclick="goScreen('scSend')" aria-label="Send money">
+      <div class="qa-ic" style="background:rgba(124,92,252,.2)" aria-hidden="true">📤</div>
+      <span class="qa-lb">SEND</span>
+    </button>
+    <button class="qa" onclick="showReceive()" aria-label="Receive money">
+      <div class="qa-ic" style="background:rgba(0,229,160,.15)" aria-hidden="true">📥</div>
+      <span class="qa-lb">RECEIVE</span>
+    </button>
+    <button class="qa" onclick="goScreen('scHistory')" aria-label="History">
+      <div class="qa-ic" style="background:rgba(255,184,48,.15)" aria-hidden="true">📋</div>
+      <span class="qa-lb">HISTORY</span>
+    </button>
+    <button class="qa" onclick="goScreen('scProfile')" aria-label="Profile">
+      <div class="qa-ic" style="background:rgba(255,79,123,.15)" aria-hidden="true">👤</div>
+      <span class="qa-lb">PROFILE</span>
+    </button>
+  </div>
+
+  <div class="sec-hdr">
+    <span class="sec-ttl">Recent</span>
+    <span class="sec-lnk" onclick="goScreen('scHistory')" tabindex="0">See all</span>
+  </div>
+  <div class="txn-list" id="homeTxns" role="list" aria-label="Recent transactions"></div>
+</section>
+
+<!-- ── SCREEN: SEND (contact select) ── -->
+<section class="screen" id="scSend" aria-label="Send money — select contact">
+  <div class="nav-row">
+    <button class="back-btn" onclick="goScreen('scHome')" aria-label="Back">←</button>
+    <span class="pg-title">Select Contact</span>
+  </div>
+
+  <div class="card" style="margin-bottom:14px">
+    <div style="font-size:13px;color:var(--text2);margin-bottom:10px;font-weight:600">🎙️ Say: "pay 500 to Priya" — or tap a contact below</div>
+    <input id="contactSearch" class="amt-words" style="width:100%;background:var(--bg3);border:1.5px solid var(--border);border-radius:10px;padding:10px 14px;font-size:14px;color:var(--text);outline:none" placeholder="Search name…" oninput="filterContacts(this.value)" aria-label="Search contacts">
+  </div>
+
+  <div style="width:100%;max-width:460px;display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:16px" id="freqGrid" role="list" aria-label="Frequent contacts"></div>
+
+  <div class="sec-hdr" style="margin-bottom:8px"><span class="sec-ttl">All Contacts</span></div>
+  <div class="txn-list" id="allContacts" role="list" aria-label="All contacts" style="margin-bottom:0"></div>
+</section>
+
+<!-- ── SCREEN: AMOUNT ── -->
+<section class="screen" id="scAmount" aria-label="Enter amount">
+  <div class="nav-row">
+    <button class="back-btn" onclick="goScreen('scSend')" aria-label="Back">←</button>
+    <span class="pg-title">Enter Amount</span>
+  </div>
+
+  <div class="rec-chip" id="recChip" role="region" aria-label="Sending to">
+    <div class="rec-av" id="rcAv" aria-hidden="true"></div>
+    <div>
+      <div class="rec-name" id="rcName">—</div>
+      <div class="rec-upi" id="rcUpi">—</div>
+    </div>
+    <span class="rec-change" onclick="goScreen('scSend')">Change</span>
+  </div>
+
+  <div class="amt-card" role="region" aria-label="Amount entry">
+    <div class="amt-big" id="amtDisp">₹<span class="amt-cur" aria-hidden="true"></span></div>
+    <div class="amt-words" id="amtWords" aria-live="polite">Enter amount above</div>
+  </div>
+
+  <div class="numpad" role="group" aria-label="Number pad">
+    <button class="nk" onclick="nk('1')" aria-label="1">1</button>
+    <button class="nk" onclick="nk('2')" aria-label="2">2</button>
+    <button class="nk" onclick="nk('3')" aria-label="3">3</button>
+    <button class="nk" onclick="nk('4')" aria-label="4">4</button>
+    <button class="nk" onclick="nk('5')" aria-label="5">5</button>
+    <button class="nk" onclick="nk('6')" aria-label="6">6</button>
+    <button class="nk" onclick="nk('7')" aria-label="7">7</button>
+    <button class="nk" onclick="nk('8')" aria-label="8">8</button>
+    <button class="nk" onclick="nk('9')" aria-label="9">9</button>
+    <button class="nk" style="color:var(--text3);font-size:16px" onclick="nk('00')" aria-label="double zero">00</button>
+    <button class="nk" onclick="nk('0')" aria-label="0">0</button>
+    <button class="nk del" onclick="nkDel()" aria-label="Delete">⌫</button>
+  </div>
+
+  <button class="primary-btn" id="proceedBtn" onclick="goScreen('scPin')" disabled aria-label="Proceed to PIN">Continue to PIN →</button>
+</section>
+
+<!-- ── SCREEN: PIN ── -->
+<section class="screen" id="scPin" aria-label="Enter PIN">
+  <div class="nav-row">
+    <button class="back-btn" onclick="goScreen('scAmount')" aria-label="Back">←</button>
+    <span class="pg-title">Enter Your PIN</span>
+  </div>
+
+  <div class="pin-hero">
+    <div class="pin-hero-row">
+      <div class="pin-icon-box" aria-hidden="true">🔐</div>
+      <div>
+        <div class="pin-title">Secure PIN Entry</div>
+        <div class="pin-sub">Use tap method or classic PIN.<br><strong>Tap PIN:</strong> each digit = number of taps.</div>
+      </div>
+    </div>
+    <div class="method-tabs" role="tablist" aria-label="PIN method">
+      <button class="mtab on" id="tabDraw" onclick="setPinMode('draw')" role="tab" aria-selected="true">✏️ Handwrite</button>
+      <button class="mtab" id="tabCls" onclick="setPinMode('classic')" role="tab" aria-selected="false">🔢 Classic</button>
+    </div>
+  </div>
+
+  <!-- HANDWRITE panel -->
+  <div id="drawPanel">
+    <div class="card" style="text-align:center">
+      <div style="font-size:48px;margin-bottom:12px">✍️</div>
+      <div style="font-size:17px;font-weight:800;margin-bottom:8px">Handwrite Your PIN</div>
+      <div style="font-size:13px;color:var(--text2);line-height:1.6;margin-bottom:16px">
+        Draw each digit of your 4-digit PIN on a fullscreen canvas.<br>
+        Our <strong style="color:var(--accent2)">ML model</strong> recognizes your handwriting in real-time.
+      </div>
+      <div id="hwModelStatus" style="font-size:11px;color:var(--text3);margin-bottom:14px;min-height:16px"></div>
+      <button class="primary-btn" onclick="openDrawOverlay()" id="hwStartBtn" style="margin-bottom:0">
+        ✍️ Start Handwriting PIN
+      </button>
+    </div>
+  </div>
+
+  <!-- CLASSIC panel -->
+  <div id="clsPanel" style="display:none">
+    <div class="cpin-dots" role="group" aria-label="PIN entry">
+      <div class="cpd" id="cp0"></div>
+      <div class="cpd" id="cp1"></div>
+      <div class="cpd" id="cp2"></div>
+      <div class="cpd" id="cp3"></div>
+    </div>
+    <div class="cpin-pad" role="group" aria-label="PIN pad">
+      <button class="cpk" onclick="cpKey('1')" aria-label="1"><span class="cpk-d">1</span></button>
+      <button class="cpk" onclick="cpKey('2')" aria-label="2 ABC"><span class="cpk-d">2</span><span class="cpk-a">ABC</span></button>
+      <button class="cpk" onclick="cpKey('3')" aria-label="3 DEF"><span class="cpk-d">3</span><span class="cpk-a">DEF</span></button>
+      <button class="cpk" onclick="cpKey('4')" aria-label="4 GHI"><span class="cpk-d">4</span><span class="cpk-a">GHI</span></button>
+      <button class="cpk" onclick="cpKey('5')" aria-label="5 JKL"><span class="cpk-d">5</span><span class="cpk-a">JKL</span></button>
+      <button class="cpk" onclick="cpKey('6')" aria-label="6 MNO"><span class="cpk-d">6</span><span class="cpk-a">MNO</span></button>
+      <button class="cpk" onclick="cpKey('7')" aria-label="7 PQRS"><span class="cpk-d">7</span><span class="cpk-a">PQRS</span></button>
+      <button class="cpk" onclick="cpKey('8')" aria-label="8 TUV"><span class="cpk-d">8</span><span class="cpk-a">TUV</span></button>
+      <button class="cpk" onclick="cpKey('9')" aria-label="9 WXYZ"><span class="cpk-d">9</span><span class="cpk-a">WXYZ</span></button>
+      <button class="cpk" disabled style="opacity:.2" aria-hidden="true"></button>
+      <button class="cpk" onclick="cpKey('0')" aria-label="0"><span class="cpk-d">0</span></button>
+      <button class="cpk del" onclick="cpDel()" aria-label="Delete"><span class="cpk-d">⌫</span></button>
+    </div>
+  </div>
+</section>
+
+<!-- ── SCREEN: REVIEW ── -->
+<section class="screen" id="scReview" aria-label="Review payment">
+  <div class="nav-row">
+    <button class="back-btn" onclick="goScreen('scPin')" aria-label="Back">←</button>
+    <span class="pg-title">Review Payment</span>
+  </div>
+  <div class="card" role="region" aria-label="Payment summary">
+    <div class="review-amt" id="revAmt">—</div>
+    <div class="review-to" id="revTo">—</div>
+    <div class="rrow"><span class="rk">Recipient</span><span class="rv" id="revRec">—</span></div>
+    <div class="rrow"><span class="rk">UPI ID</span><span class="rv" id="revUpi">—</span></div>
+    <div class="rrow"><span class="rk">Transaction Fee</span><span class="rv" style="color:var(--green)">FREE</span></div>
+    <div class="rrow"><span class="rk">Date & Time</span><span class="rv" id="revTime">—</span></div>
+  </div>
+  <button class="primary-btn" id="payFinalBtn" onclick="doPayment()" aria-label="Confirm payment">🔒 Confirm & Pay</button>
+  <button class="ghost-btn" onclick="goScreen('scAmount')" aria-label="Edit amount">Edit Amount</button>
+</section>
+
+<!-- ── SCREEN: SUCCESS ── -->
+<section class="screen" id="scSuccess" aria-label="Payment successful">
+  <div class="success-wrap">
+    <div class="success-ring" role="img" aria-label="Success checkmark">✓</div>
+    <div class="success-title">Payment Sent!</div>
+    <div class="success-sub" id="sucSub">—</div>
+    <div class="receipt" role="region" aria-label="Receipt">
+      <div class="rcp-row"><span class="rcp-k">To</span><span class="rcp-v" id="sucTo">—</span></div>
+      <div class="rcp-row"><span class="rcp-k">Amount</span><span class="rcp-v" id="sucAmt">—</span></div>
+      <div class="rcp-row"><span class="rcp-k">Txn ID</span><span class="rcp-v" id="sucTxn">—</span></div>
+      <div class="rcp-row"><span class="rcp-k">Time</span><span class="rcp-v" id="sucTime">—</span></div>
+      <div class="rcp-row"><span class="rcp-k">Status</span><span class="rcp-ok">✓ Success</span></div>
+    </div>
+    <button class="primary-btn" onclick="goHome()" aria-label="Back to home">← Back to Home</button>
+    <button class="ghost-btn" onclick="shareReceipt()" aria-label="Share receipt">📤 Share Receipt</button>
+  </div>
+</section>
+
+<!-- ── SCREEN: HISTORY ── -->
+<section class="screen" id="scHistory" aria-label="Transaction history">
+  <div class="nav-row">
+    <button class="back-btn" onclick="goScreen('scHome')" aria-label="Back">←</button>
+    <span class="pg-title">History</span>
+  </div>
+  <div class="filter-row" role="group" aria-label="Filter">
+    <button class="fpill on" onclick="filterH('all',this)" aria-pressed="true">All</button>
+    <button class="fpill" onclick="filterH('dr',this)" aria-pressed="false">Sent</button>
+    <button class="fpill" onclick="filterH('cr',this)" aria-pressed="false">Received</button>
+  </div>
+  <div class="txn-list" id="histList" role="list" aria-label="Transactions"></div>
+</section>
+
+<!-- ── SCREEN: PROFILE ── -->
+<section class="screen" id="scProfile" aria-label="Profile">
+  <div class="nav-row">
+    <button class="back-btn" onclick="goScreen('scHome')" aria-label="Back">←</button>
+    <span class="pg-title">Profile</span>
+  </div>
+  <div class="profile-hero">
+    <div class="pav" aria-hidden="true">AK</div>
+    <div class="p-name">Arjun Kumar</div>
+    <div class="p-upi">arjun.kumar@voicepay</div>
+    <div class="p-badges">
+      <span class="pbadge pb-v">✓ Verified</span>
+      <span class="pbadge pb-p">⭐ Premium</span>
+    </div>
+  </div>
+  <div class="slist" role="list">
+    <div class="sitem" tabindex="0" onclick="toast('🎙️ Voice settings coming soon')">
+      <span class="sico">🎙️</span><div class="sinfo"><div class="stit">Voice Settings</div><div class="ssub">Language, speed, wake word</div></div><span class="sarr">→</span>
+    </div>
+    <div class="sitem" tabindex="0" onclick="toast('♿ Accessibility settings coming soon')">
+      <span class="sico">♿</span><div class="sinfo"><div class="stit">Accessibility</div><div class="ssub">Tap sensitivity, PIN options</div></div><span class="sarr">→</span>
+    </div>
+    <div class="sitem" tabindex="0" onclick="toast('🔐 Security settings coming soon')">
+      <span class="sico">🔐</span><div class="sinfo"><div class="stit">Security & PIN</div><div class="ssub">Change PIN, biometrics</div></div><span class="sarr">→</span>
+    </div>
+    <div class="sitem" tabindex="0" onclick="toast('🏦 2 banks linked')">
+      <span class="sico">🏦</span><div class="sinfo"><div class="stit">Linked Accounts</div><div class="ssub">2 banks linked</div></div><span class="sarr">→</span>
+    </div>
+  </div>
+  <button class="ghost-btn danger" onclick="toast('Signed out (demo)')">Sign Out</button>
+</section>
+
+</div><!-- end #appRoot -->
+
+<!-- ───── BOTTOM NAV ───── -->
+<nav id="botNav" aria-label="Navigation">
+  <button class="bn on" id="bnHome" onclick="goScreen('scHome')" aria-label="Home" aria-current="page">
+    <span class="bn-ico">🏠</span><span class="bn-lbl">HOME</span>
+  </button>
+  <button class="bn" id="bnSend" onclick="goScreen('scSend')" aria-label="Send">
+    <span class="bn-ico">📤</span><span class="bn-lbl">SEND</span>
+  </button>
+  <button class="bn" id="bnHistory" onclick="goScreen('scHistory')" aria-label="History">
+    <span class="bn-ico">📋</span><span class="bn-lbl">HISTORY</span>
+  </button>
+  <button class="bn" id="bnProfile" onclick="goScreen('scProfile')" aria-label="Profile">
+    <span class="bn-ico">👤</span><span class="bn-lbl">PROFILE</span>
+  </button>
+</nav>
+
+<!-- ════════════════════════════════════════════════════════════
+     JAVASCRIPT — FULL LOGIC
+════════════════════════════════════════════════════════════ -->
+<script>
+'use strict';
+
+/* ─────────────────── CONTACTS ─────────────────── */
+const CONTACTS = [
+  {id:1,name:'Priya Sharma', aliases:['priya','priya sharma'],          ini:'PS', upi:'priya.sharma@oksbi',  bg:'#1e1640',col:'#a485ff', freq:true},
+  {id:2,name:'Raj Kumar',    aliases:['raj','raj kumar'],               ini:'RK', upi:'raj.kumar@okaxis',    bg:'#0d2318',col:'#00e5a0', freq:true},
+  {id:3,name:'Meera Nair',   aliases:['meera','meera nair'],            ini:'MN', upi:'meera.nair@ybl',      bg:'#2a0f1e',col:'#ff4f7b', freq:true},
+  {id:4,name:'Sara',         aliases:['sara','sara ahmed','sarah'],     ini:'SA', upi:'sara.ahmed@paytm',    bg:'#1e1a08',col:'#ffb830', freq:true},
+  {id:5,name:'Saran',        aliases:['saran','saran kumar'],           ini:'SK', upi:'saran.kumar@okaxis',  bg:'#0d1f30',col:'#40e0ff', freq:true},
+  {id:6,name:'Arjun Das',    aliases:['arjun','arjun das'],             ini:'AD', upi:'arjun.das@hdfc',      bg:'#0a1820',col:'#40c4ff', freq:false},
+  {id:7,name:'Vikram Singh', aliases:['vikram','vikram singh'],         ini:'VS', upi:'vikram.singh@sbi',    bg:'#131f0a',col:'#69f0ae', freq:false},
+  {id:8,name:'Deepa Krishna',aliases:['deepa','deepa krishna'],         ini:'DK', upi:'deepa.k@icici',       bg:'#1f0a14',col:'#ff80ab', freq:false},
+  {id:9,name:'Rohit Gupta',  aliases:['rohit','rohit gupta'],           ini:'RG', upi:'rohit.gupta@upi',     bg:'#0a0a1f',col:'#8c9eff', freq:false},
+];
+
+/* ─────────────────── TRANSACTIONS ─────────────────── */
+let TXNS = [
+  {id:'T001',name:'Priya Sharma',ini:'PS',bg:'#1e1640',col:'#a485ff',amt:1200,  type:'cr',note:'Lunch split',date:'Today, 2:30 PM'},
+  {id:'T002',name:'Amazon Pay',  ini:'AZ',bg:'#1e1208',col:'#ffb830',amt:-3499, type:'dr',note:'Electronics', date:'Yesterday'},
+  {id:'T003',name:'Raj Kumar',   ini:'RK',bg:'#0d2318',col:'#00e5a0',amt:500,   type:'cr',note:'Coffee',      date:'2 days ago'},
+  {id:'T004',name:'Netflix',     ini:'NF',bg:'#200a0a',col:'#ff4f7b',amt:-649,  type:'dr',note:'Subscription',date:'3 days ago'},
+  {id:'T005',name:'Sara',        ini:'SA',bg:'#1e1a08',col:'#ffb830',amt:2500,  type:'cr',note:'Rent share',  date:'4 days ago'},
+];
+
+/* ─────────────────── STATE ─────────────────── */
+let currentScreen = 'scHome';
+let selectedContact = null;
+let amountStr = '';
+let pinMode = 'draw';
+let classicPin = '';
+let balance = 24850;
+const CORRECT_PIN = [1, 2, 2, 1]; // Demo PIN: 1-2-2-1
+
+/* ─────────────────── HANDWRITING ML STATE ─────────────────── */
+let digitModel = null;
+let hwCtx = null;
+let hwDrawing = false;
+let hwPoints = [];
+let hwDigits = [];    // recognized digits so far
+let hwCurrent = 0;    // which digit we're on (0-3)
+let hwStrokeTimer = null;
+
+/* ─────────────────── CURSOR ─────────────────── */
+const cur = document.getElementById('cur');
+const cur2 = document.getElementById('cur2');
+let mx=0,my=0,tx=0,ty=0;
+document.addEventListener('mousemove', e => {
+  mx = e.clientX; my = e.clientY;
+  cur.style.left = mx+'px'; cur.style.top = my+'px';
+});
+(function loop(){
+  tx += (mx-tx)*.1; ty += (my-ty)*.1;
+  cur2.style.left=tx+'px'; cur2.style.top=ty+'px';
+  requestAnimationFrame(loop);
+})();
+document.addEventListener('mouseover', e => {
+  const hov = e.target.closest('button,.qa,.txn,.sitem,.fpill,.mtab,.nk,.cpk,.contact-card,.back-btn');
+  document.body.classList.toggle('hov', !!hov);
+  document.body.classList.toggle('tap-hov', !!e.target.closest('#tapZone'));
+});
+document.addEventListener('touchstart', () => {
+  cur.style.display='none'; cur2.style.display='none';
+},{passive:true});
+
+/* ─────────────────── TTS ENGINE ─────────────────── */
+// Queue-based TTS so multiple calls don't overlap
+let ttsQueue = [], ttsBusy = false;
+function speak(text, priority = false) {
+  if (!window.speechSynthesis) return;
+  if (priority) {
+    speechSynthesis.cancel();
+    ttsQueue = [];
+    ttsBusy = false;
+  }
+  ttsQueue.push(text);
+  processTtsQueue();
+}
+function processTtsQueue() {
+  if (ttsBusy || !ttsQueue.length) return;
+  ttsBusy = true;
+  const text = ttsQueue.shift();
+  const u = new SpeechSynthesisUtterance(text);
+  u.rate = 0.95; u.pitch = 1.05; u.volume = 1;
+  setVbState('speaking', text);
+  u.onend = u.onerror = () => {
+    ttsBusy = false;
+    if (ttsQueue.length) processTtsQueue();
+    else restoreListeningState();
+  };
+  try { speechSynthesis.speak(u); } catch(e) { ttsBusy = false; }
+}
+function restoreListeningState() {
+  if (voiceActive) setVbState('listening', 'Listening… speak a command');
+  else setVbState('idle', 'Tap to activate voice');
+}
+
+/* ─────────────────── VOICE STATUS BAR ─────────────────── */
+function setVbState(state, msg) {
+  const orb = document.getElementById('vbOrb');
+  const txt = document.getElementById('vbText');
+  orb.className = 'vb-orb ' + state;
+  txt.textContent = msg || '';
+  if (state === 'listening') orb.textContent = '🎙️';
+  else if (state === 'speaking') orb.textContent = '🔊';
+  else if (state === 'error') orb.textContent = '⚠️';
+  else orb.textContent = '💤';
+}
+function setTranscript(t) {
+  document.getElementById('vbTranscript').textContent = t ? '"'+t+'"' : '';
+}
+
+/* ─────────────────── ALWAYS-ON VOICE RECOGNITION ─────────────────── */
+let voiceActive = false;
+let recognition = null;
+let voiceRestartTimer = null;
+let voiceStarted = false;
+
+const SCREEN_HINTS = {
+  scHome:    ['"pay 500 to Sara"','"send 200 to Raj"','"check balance"','"open history"'],
+  scSend:    ['"pay 500 to Sara"','"select Priya"','"go back"'],
+  scAmount:  ['"set amount 500"','"1000"','"delete"','"continue"'],
+  scPin:     ['"confirm"','"reset"','"go back"'],
+  scReview:  ['"confirm payment"','"cancel"'],
+  scHistory: ['"show sent"','"show received"','"go home"'],
+  scProfile: ['"go home"','"go back"'],
+};
+
+function showCmdHint() {
+  const hints = SCREEN_HINTS[currentScreen] || [];
+  const list = document.getElementById('cmdList');
+  list.innerHTML = hints.map(h=>`<span class="cmd">${h}</span>`).join('');
+  const el = document.getElementById('cmdHint');
+  el.classList.add('show');
+  clearTimeout(el._t);
+  el._t = setTimeout(()=>el.classList.remove('show'), 6000);
+}
+
+function initVoice() {
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SR) {
+    setVbState('error', '⚠️ Voice not supported — use Chrome');
+    speak('Voice recognition is not supported in this browser. Please open the app in Google Chrome.');
+    return;
+  }
+  startVoice(SR);
+}
+
+function startVoice(SRClass) {
+  if (voiceActive) return;
+  const SR = SRClass || window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SR) return;
+
+  recognition = new SR();
+  recognition.lang = 'en-IN';
+  recognition.continuous = false;        // single result, then restart
+  recognition.interimResults = true;
+  recognition.maxAlternatives = 5;
+
+  recognition.onstart = () => {
+    voiceActive = true;
+    voiceStarted = true;
+    setVbState('listening', 'Listening… speak a command');
+    showCmdHint();
+  };
+
+  recognition.onresult = (e) => {
+    let interim = '';
+    let finalT = '';
+    for (let i = e.resultIndex; i < e.results.length; i++) {
+      if (e.results[i].isFinal) finalT += e.results[i][0].transcript;
+      else interim += e.results[i][0].transcript;
+    }
+    if (interim) setTranscript(interim);
+    if (finalT.trim()) {
+      setTranscript(finalT.trim());
+      handleVoice(finalT.trim().toLowerCase());
+    }
+  };
+
+  recognition.onerror = (e) => {
+    voiceActive = false;
+    if (e.error === 'not-allowed') {
+      setVbState('error', 'Microphone blocked — allow mic access');
+      speak('Please allow microphone access in your browser settings, then reload the app.',true);
+      return;
+    }
+    if (e.error === 'network') {
+      setVbState('error', 'Network error — retrying…');
+    }
+    scheduleRestart();
+  };
+
+  recognition.onend = () => {
+    voiceActive = false;
+    scheduleRestart();
+  };
+
+  try {
+    recognition.start();
+  } catch(err) {
+    voiceActive = false;
+    scheduleRestart();
+  }
+}
+
+function scheduleRestart() {
+  clearTimeout(voiceRestartTimer);
+  voiceRestartTimer = setTimeout(() => {
+    if (!ttsBusy) startVoice();
+    else {
+      // wait until TTS is done speaking, then restart
+      const check = setInterval(()=>{
+        if(!ttsBusy){clearInterval(check);startVoice();}
+      },300);
+    }
+  }, 800);
+}
+
+function stopAndRestartVoice() {
+  if (recognition) try { recognition.stop(); } catch(e){}
+  voiceActive = false;
+  clearTimeout(voiceRestartTimer);
+  voiceRestartTimer = setTimeout(()=>startVoice(), 1200);
+}
+
+/* ─────────────────── VOICE COMMAND HANDLER ─────────────────── */
+function handleVoice(cmd) {
+  cmd = cmd.trim().toLowerCase()
+    .replace(/rupees?/gi,'').replace(/rs\.?/gi,'').replace(/₹/g,'').trim();
+
+  // ── PAY / SEND pattern (name-before-amount): "pay saran 500" | "send raj 200"
+  const payMatchA = cmd.match(/(?:pay|send|transfer)\s+([a-z][a-z\s]{1,20}?)\s+(\d+)(?:\s+rupees?)?$/i);
+  if (payMatchA) {
+    const nameRaw = payMatchA[1].replace(/\s*(?:please|now|quickly).*$/i,'').trim();
+    const amount  = payMatchA[2];
+    const contact = findContact(nameRaw);
+    if (contact) {
+      selectedContact = contact;
+      amountStr = amount;
+      speak(`Paying ${amount} rupees to ${contact.name}. Please enter your PIN.`, true);
+      populateAmountUI();
+      setTimeout(()=>{ goScreen('scPin'); initPin(); }, 300);
+      return;
+    }
+  }
+
+  // ── PAY / SEND pattern (amount-before-name): "pay 500 to sara" | "send 200 to raj"
+  const payMatchB = cmd.match(/(?:pay|send|transfer)\s+(\d+)\s+(?:rupees?\s+)?(?:to\s+)?(.+)/i);
+  if (payMatchB) {
+    const amount = payMatchB[1];
+    const nameRaw = payMatchB[2].replace(/\s*(?:please|now|quickly).*$/i,'').trim();
+    const contact = findContact(nameRaw);
+    if (contact) {
+      selectedContact = contact;
+      amountStr = amount;
+      speak(`Paying ${amount} rupees to ${contact.name}. Please enter your PIN.`, true);
+      populateAmountUI();
+      setTimeout(()=>{ goScreen('scPin'); initPin(); }, 300);
+    } else {
+      speak(`I could not find ${nameRaw} in your contacts. Please try again.`, true);
+    }
+    return;
+  }
+
+  // ── BALANCE
+  if (/balance|how much|my money/.test(cmd)) {
+    speak(`Your available balance is ${balance.toLocaleString('en-IN')} rupees.`, true);
+    return;
+  }
+
+  // ── NAVIGATION
+  if (/\b(home|main screen|dashboard)\b/.test(cmd)) { speak('Going home.',true); setTimeout(goHome,400); return; }
+  if (/\b(history|transactions?|past payments?)\b/.test(cmd)) { speak('Opening history.',true); setTimeout(()=>goScreen('scHistory'),400); return; }
+  if (/\b(profile|settings?|account)\b/.test(cmd)) { speak('Opening profile.',true); setTimeout(()=>goScreen('scProfile'),400); return; }
+  if (/\b(send|pay|transfer)\b/.test(cmd) && !cmd.includes(' to ')) { speak('Opening send. Select a contact or say pay amount to name.',true); setTimeout(()=>goScreen('scSend'),400); return; }
+  if (/\b(back|go back|previous|cancel)\b/.test(cmd)) { handleBack(); return; }
+
+  // ── AMOUNT SCREEN
+  if (currentScreen === 'scAmount') {
+    const numOnly = cmd.match(/^(\d+)$/);
+    if (numOnly) { amountStr = numOnly[1]; renderAmt(); speak(`Amount set to ${parseInt(amountStr).toLocaleString('en-IN')} rupees.`,true); return; }
+    if (/\b(delete|clear|remove|backspace)\b/.test(cmd)) { nkDel(); speak('Deleted.',true); return; }
+    if (/\b(continue|proceed|next|confirm|done)\b/.test(cmd) && amountStr && parseInt(amountStr)>0) {
+      speak('Going to PIN.',true); setTimeout(()=>goScreen('scPin'),400); return;
+    }
+  }
+
+  // ── CONTACT SELECTION on send screen
+  if (currentScreen === 'scSend') {
+    const contact = findContact(cmd);
+    if (contact) { selectContact(contact); return; }
+    // "select priya" / "pay to raj"
+    const selMatch = cmd.match(/(?:select|choose|pick|pay to|send to)\s+(.+)/i);
+    if (selMatch) {
+      const c2 = findContact(selMatch[1].trim());
+      if (c2) { selectContact(c2); return; }
+    }
+  }
+
+  // ── PIN SCREEN — HANDWRITE MODE VOICE HELPERS
+  if (currentScreen === 'scPin' && pinMode === 'draw') {
+    if (/\b(reset|clear|redo|again|restart)\b/.test(cmd)) { clearHwCanvas(); speak('Canvas cleared. Draw again.',true); return; }
+  }
+
+  // ── REVIEW SCREEN
+  if (currentScreen === 'scReview') {
+    if (/\b(confirm|pay|yes|proceed|done|ok)\b/.test(cmd)) { doPayment(); return; }
+    if (/\b(cancel|no|go back|edit)\b/.test(cmd)) { goScreen('scAmount'); speak('Going back to amount.',true); return; }
+  }
+
+  // ── SUCCESS SCREEN
+  if (currentScreen === 'scSuccess') {
+    if (/\b(home|done|finish|another|new)\b/.test(cmd)) { goHome(); return; }
+    if (/\b(share|receipt|send receipt)\b/.test(cmd)) { shareReceipt(); return; }
+  }
+
+  // ── UNRECOGNISED — guide user
+  speak(`I didn't catch that. You can say: pay 500 to Sara, check balance, go home, or history.`, true);
+}
+
+function handleBack() {
+  const map = {scSend:'scHome',scAmount:'scSend',scPin:'scAmount',scReview:'scPin',scSuccess:'scHome',scHistory:'scHome',scProfile:'scHome'};
+  const dest = map[currentScreen];
+  if (dest) { speak('Going back.',true); setTimeout(()=>goScreen(dest),400); }
+}
+
+function wordToNum(str) {
+  const map = {one:1,two:2,three:3,four:4,five:5,six:6,seven:7,eight:8,nine:9,
+    '1':1,'2':2,'3':3,'4':4,'5':5,'6':6,'7':7,'8':8,'9':9};
+  const clean = str.trim().toLowerCase();
+  return map[clean] || 0;
+}
+
+function findContact(raw) {
+  const q = raw.toLowerCase().trim();
+  return CONTACTS.find(c => c.aliases.some(a => q.includes(a))) || null;
+}
+
+/* ─────────────────── NAVIGATION ─────────────────── */
+const NAV_BN_MAP = {scHome:'bnHome',scSend:'bnSend',scHistory:'bnHistory',scProfile:'bnProfile'};
+
+function goScreen(id) {
+  document.getElementById(currentScreen).classList.remove('active');
+  document.getElementById(id).classList.add('active');
+  currentScreen = id;
+  document.getElementById('appRoot').scrollTop = 0;
+  // update bottom nav
+  document.querySelectorAll('.bn').forEach(b=>{b.classList.remove('on');b.removeAttribute('aria-current')});
+  const nb = NAV_BN_MAP[id] && document.getElementById(NAV_BN_MAP[id]);
+  if (nb) { nb.classList.add('on'); nb.setAttribute('aria-current','page'); }
+  // show updated hints
+  showCmdHint();
+  // screen-specific
+  if (id === 'scPin') initPin();
+  if (id === 'scReview') populateReview();
+}
+
+function goHome() {
+  selectedContact = null; amountStr = '';
+  hwDigits = []; hwCurrent = 0; hwDrawing = false; classicPin = '';
+  // Close draw overlay if open
+  document.getElementById('drawOverlay').classList.remove('active');
+  document.getElementById('amtDisp').innerHTML = '₹<span class="amt-cur" aria-hidden="true"></span>';
+  document.getElementById('amtDisp').className = 'amt-big';
+  document.getElementById('amtWords').textContent = 'Enter amount above';
+  document.getElementById('proceedBtn').disabled = true;
+  goScreen('scHome');
+  speak('Home screen. Your balance is ' + balance.toLocaleString('en-IN') + ' rupees. Say pay amount to name to start a payment.', true);
+}
+
+/* ─────────────────── DATA RENDER ─────────────────── */
+function txnHTML(t) {
+  const a = Math.abs(t.amt);
+  return `<div class="txn" role="listitem" tabindex="0"
+    onclick="speak('${t.name}. ${t.type==='cr'?'Received':'Sent'} ${a} rupees. ${t.note}')"
+    aria-label="${t.name}, ${t.type==='cr'?'received ₹'+a:'sent ₹'+a}">
+    <div class="txn-av" style="background:${t.bg};color:${t.col}">${t.ini}</div>
+    <div class="txn-info">
+      <div class="txn-name">${t.name}</div>
+      <div class="txn-note">${t.note} · ${t.date}</div>
+    </div>
+    <div class="txn-amt ${t.type}">${t.type==='cr'?'+':'-'}₹${a.toLocaleString('en-IN')}</div>
+  </div>`;
+}
+
+function renderHome() {
+  document.getElementById('homeTxns').innerHTML = TXNS.slice(0,5).map(txnHTML).join('');
+}
+
+function renderFreq() {
+  document.getElementById('freqGrid').innerHTML = CONTACTS.filter(c=>c.freq).map(c=>`
+    <div style="background:var(--surface);border:1.5px solid var(--border);border-radius:var(--r20);padding:14px 6px;display:flex;flex-direction:column;align-items:center;gap:7px;cursor:none;transition:all .22s var(--spring)"
+      onclick="selectContact(CONTACTS.find(x=>x.id===${c.id}))"
+      tabindex="0" role="button" aria-label="Select ${c.name}"
+      onmouseover="this.style.borderColor='var(--border2)';this.style.transform='translateY(-3px)'"
+      onmouseout="this.style.borderColor='var(--border)';this.style.transform=''">
+      <div style="width:44px;height:44px;border-radius:50%;background:${c.bg};color:${c.col};display:flex;align-items:center;justify-content:center;font-weight:800;font-size:14px">${c.ini}</div>
+      <div style="font-size:10px;font-weight:700;color:var(--text3)">${c.name.split(' ')[0]}</div>
+    </div>`).join('');
+}
+
+function filterContacts(q) {
+  const list = q ? CONTACTS.filter(c=>c.name.toLowerCase().includes(q.toLowerCase())) : CONTACTS;
+  document.getElementById('allContacts').innerHTML = list.map(c=>`
+    <div class="txn" onclick="selectContact(CONTACTS.find(x=>x.id===${c.id}))"
+      tabindex="0" role="button" aria-label="Select ${c.name}">
+      <div class="txn-av" style="background:${c.bg};color:${c.col}">${c.ini}</div>
+      <div class="txn-info"><div class="txn-name">${c.name}</div><div class="txn-note">${c.upi}</div></div>
+      <span style="color:var(--text3);font-size:13px">→</span>
+    </div>`).join('');
+}
+
+function renderHistory() {
+  document.getElementById('histList').innerHTML = TXNS.map(txnHTML).join('');
+}
+
+/* ─────────────────── CONTACT SELECT ─────────────────── */
+function selectContact(c) {
+  selectedContact = c;
+  populateAmountUI();
+  speak(`Selected ${c.name}. Now enter the amount or say the amount.`, true);
+  goScreen('scAmount');
+}
+
+function populateAmountUI() {
+  if (!selectedContact) return;
+  const c = selectedContact;
+  document.getElementById('rcAv').textContent = c.ini;
+  document.getElementById('rcAv').style.cssText = `background:${c.bg};color:${c.col}`;
+  document.getElementById('rcName').textContent = c.name;
+  document.getElementById('rcUpi').textContent = c.upi;
+  if (amountStr) renderAmt();
+}
+
+/* ─────────────────── AMOUNT ─────────────────── */
+function nk(v) {
+  if (amountStr.length >= 9) return;
+  if (!amountStr && v === '00') return;
+  amountStr += v; renderAmt(); speak(v);
+}
+function nkDel() {
+  amountStr = amountStr.slice(0,-1); renderAmt(); speak('deleted');
+}
+function renderAmt() {
+  const num = parseInt(amountStr) || 0;
+  const el = document.getElementById('amtDisp');
+  if (num > 0) {
+    el.textContent = '₹' + num.toLocaleString('en-IN');
+    el.className = 'amt-big live';
+  } else {
+    el.innerHTML = '₹<span class="amt-cur" aria-hidden="true"></span>';
+    el.className = 'amt-big';
+  }
+  document.getElementById('amtWords').textContent = num > 0 ? numWords(num)+' rupees' : 'Enter amount above';
+  document.getElementById('proceedBtn').disabled = !(num > 0 && selectedContact);
+}
+
+function numWords(n) {
+  if(!n) return 'zero';
+  const a=['','one','two','three','four','five','six','seven','eight','nine','ten','eleven','twelve','thirteen','fourteen','fifteen','sixteen','seventeen','eighteen','nineteen'];
+  const b=['','','twenty','thirty','forty','fifty','sixty','seventy','eighty','ninety'];
+  function w(x){
+    if(x<20)return a[x];
+    if(x<100)return b[Math.floor(x/10)]+(x%10?' '+a[x%10]:'');
+    if(x<1000)return a[Math.floor(x/100)]+' hundred'+(x%100?' '+w(x%100):'');
+    if(x<100000)return w(Math.floor(x/1000))+' thousand'+(x%1000?' '+w(x%1000):'');
+    return w(Math.floor(x/100000))+' lakh'+(x%100000?' '+w(x%100000):'');
+  }
+  return w(n);
+}
+
+/* ─────────────── PIN — HANDWRITE MODE (ML DIGIT RECOGNITION) ─────────────── */
+
+function initPin() {
+  classicPin = '';
+  hwDigits = []; hwCurrent = 0;
+  updateClassicDots();
+  updateModelStatus();
+  if (pinMode === 'draw') {
+    speak('Handwrite PIN screen. Tap the button to draw each digit of your PIN.', true);
+  } else {
+    speak('Classic PIN screen. Press the number buttons to enter your 4-digit PIN.', true);
+  }
+}
+
+function setPinMode(m) {
+  pinMode = m;
+  document.getElementById('drawPanel').style.display = m === 'draw' ? 'block' : 'none';
+  document.getElementById('clsPanel').style.display  = m === 'classic' ? 'block' : 'none';
+  document.getElementById('tabDraw').className = 'mtab' + (m === 'draw' ? ' on' : '');
+  document.getElementById('tabCls').className  = 'mtab' + (m === 'classic' ? ' on' : '');
+  document.getElementById('tabDraw').setAttribute('aria-selected', m === 'draw');
+  document.getElementById('tabCls').setAttribute('aria-selected', m === 'classic');
+  classicPin = '';
+  hwDigits = []; hwCurrent = 0;
+  updateClassicDots();
+  if (m === 'draw') {
+    updateModelStatus();
+    speak('Handwrite PIN mode. Tap Start to draw your PIN digits.', true);
+  } else {
+    speak('Classic PIN. Enter your PIN using the keypad.', true);
+  }
+}
+
+function updateModelStatus() {
+  const el = document.getElementById('hwModelStatus');
+  if (!el) return;
+  if (digitModel) {
+    el.innerHTML = '✅ <span style="color:var(--green)">ML model loaded — ready to recognize</span>';
+    document.getElementById('hwStartBtn').disabled = false;
+  } else {
+    el.innerHTML = '⏳ <span style="color:var(--amber)">Loading ML model…</span>';
+    document.getElementById('hwStartBtn').disabled = true;
+  }
+}
+
+/* ─── LOAD TF.js DIGIT MODEL ─── */
+async function loadDigitModel() {
+  try {
+    updateModelStatus();
+    // Try loading from local server path
+    digitModel = await tf.loadLayersModel('digit_model/model.json');
+    console.log('Digit recognition model loaded successfully');
+    updateModelStatus();
+    return true;
+  } catch (e) {
+    console.warn('Could not load digit model from server:', e.message);
+    // Try alternative path
+    try {
+      digitModel = await tf.loadLayersModel('./digit_model/model.json');
+      console.log('Digit model loaded from alternative path');
+      updateModelStatus();
+      return true;
+    } catch (e2) {
+      console.warn('Model not available:', e2.message);
+      const el = document.getElementById('hwModelStatus');
+      if (el) el.innerHTML = '⚠️ <span style="color:var(--red)">Model not found — run train_digit_model.py first</span>';
+      return false;
+    }
+  }
+}
+
+/* ─── FULLSCREEN DRAWING OVERLAY ─── */
+function openDrawOverlay() {
+  if (!digitModel) {
+    toast('⚠️ ML model not loaded — run train_digit_model.py');
+    speak('The digit recognition model is not loaded. Please run the training script first.', true);
+    return;
+  }
+  hwDigits = [];
+  hwCurrent = 0;
+  const overlay = document.getElementById('drawOverlay');
+  overlay.classList.add('active');
+  initHwCanvas();
+  updateHwProgress();
+  speak(`Draw digit ${hwCurrent + 1} of 4.`, true);
+}
+
+function closeDrawOverlay() {
+  const overlay = document.getElementById('drawOverlay');
+  overlay.classList.remove('active');
+  hwDigits = []; hwCurrent = 0;
+  clearTimeout(hwStrokeTimer);
+  speak('Cancelled handwriting PIN.', true);
+}
+
+function initHwCanvas() {
+  const canvas = document.getElementById('hwCanvas');
+  const wrap = document.getElementById('doCanvasWrap');
+  if (!canvas || !wrap) return;
+
+  // Size canvas to fill the wrapper
+  const rect = wrap.getBoundingClientRect();
+  canvas.width = rect.width * window.devicePixelRatio;
+  canvas.height = rect.height * window.devicePixelRatio;
+  canvas.style.width = rect.width + 'px';
+  canvas.style.height = rect.height + 'px';
+
+  hwCtx = canvas.getContext('2d');
+  hwCtx.scale(window.devicePixelRatio, window.devicePixelRatio);
+  clearHwCanvas();
+
+  // Drawing event handlers
+  canvas.onmousedown = hwStart;
+  canvas.onmousemove = hwMove;
+  canvas.onmouseup = hwEnd;
+  canvas.onmouseleave = hwEnd;
+  canvas.ontouchstart = hwStart;
+  canvas.ontouchmove = hwMove;
+  canvas.ontouchend = hwEnd;
+  canvas.ontouchcancel = hwEnd;
+}
+
+function clearHwCanvas() {
+  if (!hwCtx) return;
+  const canvas = document.getElementById('hwCanvas');
+  const w = canvas.width / window.devicePixelRatio;
+  const h = canvas.height / window.devicePixelRatio;
+  hwCtx.fillStyle = '#000';
+  hwCtx.fillRect(0, 0, w, h);
+  hwPoints = [];
+  clearTimeout(hwStrokeTimer);
+  // Hide result & spinner
+  document.getElementById('doResult').className = 'do-result';
+  document.getElementById('doSpinner').className = 'do-processing';
+  document.getElementById('doConfLabel').textContent = '';
+  document.getElementById('doConfFill').style.width = '0';
+  document.getElementById('doInstruction').textContent = 'Draw a digit with your finger or mouse';
+}
+
+function getHwPos(e) {
+  const canvas = document.getElementById('hwCanvas');
+  const rect = canvas.getBoundingClientRect();
+  const src = e.touches ? e.touches[0] : e;
+  return {
+    x: src.clientX - rect.left,
+    y: src.clientY - rect.top
+  };
+}
+
+function hwStart(e) {
+  e.preventDefault();
+  hwDrawing = true;
+  clearTimeout(hwStrokeTimer);
+  // Hide any previous result
+  document.getElementById('doResult').className = 'do-result';
+  document.getElementById('doSpinner').className = 'do-processing';
+
+  const pos = getHwPos(e);
+  hwPoints.push(pos);
+  hwCtx.beginPath();
+  hwCtx.moveTo(pos.x, pos.y);
+  hwCtx.lineCap = 'round';
+  hwCtx.lineJoin = 'round';
+  hwCtx.lineWidth = 16;
+  hwCtx.strokeStyle = '#ffffff';
+  hwCtx.shadowColor = 'rgba(255,255,255,0.4)';
+  hwCtx.shadowBlur = 6;
+}
+
+function hwMove(e) {
+  if (!hwDrawing) return;
+  e.preventDefault();
+  const pos = getHwPos(e);
+  hwPoints.push(pos);
+  hwCtx.lineTo(pos.x, pos.y);
+  hwCtx.stroke();
+  hwCtx.beginPath();
+  hwCtx.moveTo(pos.x, pos.y);
+}
+
+function hwEnd(e) {
+  if (!hwDrawing) return;
+  if (e) e.preventDefault();
+  hwDrawing = false;
+  hwCtx.shadowBlur = 0;
+
+  // After user lifts finger, wait a moment for multi-stroke digits, then process
+  if (hwPoints.length > 5) {
+    clearTimeout(hwStrokeTimer);
+    document.getElementById('doInstruction').textContent = 'Lift to recognize… or keep drawing';
+    hwStrokeTimer = setTimeout(() => {
+      processDrawnDigit();
+    }, 800);
+  }
+}
+
+/* ─── PREPROCESSING & INFERENCE ─── */
+async function processDrawnDigit() {
+  if (!digitModel || hwPoints.length < 5) return;
+
+  // Show spinner
+  document.getElementById('doSpinner').className = 'do-processing show';
+  document.getElementById('doInstruction').textContent = 'Recognizing…';
+
+  // Small delay for visual feedback
+  await new Promise(r => setTimeout(r, 200));
+
+  try {
+    const tensor = preprocessCanvas();
+    const prediction = digitModel.predict(tensor);
+    const probs = await prediction.data();
+    tensor.dispose();
+    prediction.dispose();
+
+    // Find best prediction
+    let maxProb = 0, bestDigit = 0;
+    for (let i = 0; i < 10; i++) {
+      if (probs[i] > maxProb) { maxProb = probs[i]; bestDigit = i; }
+    }
+
+    const confidence = Math.round(maxProb * 100);
+    console.log(`Recognized digit: ${bestDigit} (confidence: ${confidence}%)`);
+
+    // Hide spinner
+    document.getElementById('doSpinner').className = 'do-processing';
+
+    // Show result
+    showDigitResult(bestDigit, confidence);
+  } catch (err) {
+    console.error('Inference error:', err);
+    document.getElementById('doSpinner').className = 'do-processing';
+    document.getElementById('doInstruction').textContent = 'Error — please redraw';
+    toast('⚠️ Recognition error — try again');
+  }
+}
+
+function preprocessCanvas() {
+  const canvas = document.getElementById('hwCanvas');
+  const dpr = window.devicePixelRatio;
+  const w = canvas.width;
+  const h = canvas.height;
+
+  // Get image data from the full canvas
+  const srcCtx = canvas.getContext('2d');
+  const imgData = srcCtx.getImageData(0, 0, w, h);
+  const pixels = imgData.data;
+
+  // Find bounding box of the drawn content (white pixels on black)
+  let minX = w, minY = h, maxX = 0, maxY = 0;
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const idx = (y * w + x) * 4;
+      // Check if pixel is "white enough" (drawn)
+      if (pixels[idx] > 40) {
+        if (x < minX) minX = x;
+        if (x > maxX) maxX = x;
+        if (y < minY) minY = y;
+        if (y > maxY) maxY = y;
+      }
+    }
+  }
+
+  // Add padding around bounding box
+  const pad = Math.max((maxX - minX), (maxY - minY)) * 0.15;
+  minX = Math.max(0, minX - pad);
+  minY = Math.max(0, minY - pad);
+  maxX = Math.min(w, maxX + pad);
+  maxY = Math.min(h, maxY + pad);
+
+  // Make it square (MNIST expects square input)
+  let bw = maxX - minX;
+  let bh = maxY - minY;
+  if (bw > bh) {
+    const diff = bw - bh;
+    minY = Math.max(0, minY - diff / 2);
+    maxY = Math.min(h, maxY + diff / 2);
+  } else {
+    const diff = bh - bw;
+    minX = Math.max(0, minX - diff / 2);
+    maxX = Math.min(w, maxX + diff / 2);
+  }
+
+  // Create a temporary canvas for the cropped & resized image
+  const tmpCanvas = document.createElement('canvas');
+  tmpCanvas.width = 28;
+  tmpCanvas.height = 28;
+  const tmpCtx = tmpCanvas.getContext('2d');
+
+  // Black background
+  tmpCtx.fillStyle = '#000';
+  tmpCtx.fillRect(0, 0, 28, 28);
+
+  // Draw cropped region into 20x20 area centered in 28x28 (MNIST convention)
+  tmpCtx.drawImage(
+    canvas,
+    minX, minY, maxX - minX, maxY - minY,
+    4, 4, 20, 20
+  );
+
+  // Get 28x28 image data
+  const small = tmpCtx.getImageData(0, 0, 28, 28);
+  const data = new Float32Array(28 * 28);
+  for (let i = 0; i < 28 * 28; i++) {
+    // Use red channel (grayscale), normalize to [0, 1]
+    data[i] = small.data[i * 4] / 255.0;
+  }
+
+  // Return as TF tensor [1, 28, 28, 1]
+  return tf.tensor4d(data, [1, 28, 28, 1]);
+}
+
+/* ─── SHOW RESULT & ADVANCE ─── */
+function showDigitResult(digit, confidence) {
+  const resultEl = document.getElementById('doResult');
+  resultEl.textContent = digit;
+  resultEl.className = 'do-result show';
+
+  // Update confidence bar
+  document.getElementById('doConfLabel').textContent = `Confidence: ${confidence}%`;
+  document.getElementById('doConfFill').style.width = confidence + '%';
+
+  speak(`${digit}`, true);
+
+  // Record the digit
+  hwDigits.push(digit);
+  hwCurrent = hwDigits.length;
+
+  // Update progress dots
+  updateHwProgress();
+
+  // After showing result, move to next digit or verify
+  setTimeout(() => {
+    resultEl.className = 'do-result';
+
+    if (hwDigits.length >= 4) {
+      // All 4 digits entered — verify PIN
+      verifyHwPin();
+    } else {
+      // Clear canvas for next digit
+      clearHwCanvas();
+      document.getElementById('doInstruction').textContent =
+        `Draw digit ${hwCurrent + 1} of 4`;
+      speak(`Draw digit ${hwCurrent + 1}.`, true);
+    }
+  }, 900);
+}
+
+function updateHwProgress() {
+  for (let i = 0; i < 4; i++) {
+    const dot = document.getElementById('doPdot' + i);
+    if (!dot) continue;
+    if (i < hwDigits.length) {
+      dot.className = 'do-pdot filled';
+      dot.textContent = hwDigits[i];
+    } else if (i === hwCurrent) {
+      dot.className = 'do-pdot current';
+      dot.textContent = '';
+    } else {
+      dot.className = 'do-pdot';
+      dot.textContent = '';
+    }
+  }
+  document.getElementById('doTitle').textContent =
+    hwCurrent >= 4 ? 'Verifying PIN…' : `Draw Digit ${hwCurrent + 1} of 4`;
+}
+
+function verifyHwPin() {
+  const ok = hwDigits.length === 4 && hwDigits.every((d, i) => d === CORRECT_PIN[i]);
+
+  if (ok) {
+    // PIN correct!
+    for (let i = 0; i < 4; i++) {
+      const dot = document.getElementById('doPdot' + i);
+      if (dot) dot.className = 'do-pdot filled';
+    }
+    const resultEl = document.getElementById('doResult');
+    resultEl.textContent = '✓';
+    resultEl.className = 'do-result show correct';
+
+    speak('PIN correct! Proceeding to review.', true);
+
+    setTimeout(() => {
+      document.getElementById('drawOverlay').classList.remove('active');
+      goScreen('scReview');
+    }, 1200);
+  } else {
+    // PIN wrong!
+    for (let i = 0; i < 4; i++) {
+      const dot = document.getElementById('doPdot' + i);
+      if (dot) dot.className = 'do-pdot wrong';
+    }
+    const resultEl = document.getElementById('doResult');
+    resultEl.textContent = '✗';
+    resultEl.className = 'do-result show wrong';
+
+    speak('Wrong PIN. Try again.', true);
+
+    setTimeout(() => {
+      resultEl.className = 'do-result';
+      hwDigits = []; hwCurrent = 0;
+      updateHwProgress();
+      clearHwCanvas();
+      document.getElementById('doInstruction').textContent = 'Draw digit 1 of 4';
+    }, 1500);
+  }
+}
+
+/* ─────────────────── PIN — CLASSIC MODE ─────────────────── */
+function cpKey(v) {
+  if (classicPin.length>=4) return;
+  classicPin+=v; updateClassicDots(); speak(v);
+  if (classicPin.length===4) verifyClassicPin();
+}
+function cpDel() { classicPin=classicPin.slice(0,-1); updateClassicDots(); speak('deleted'); }
+function updateClassicDots() {
+  for(let i=0;i<4;i++) document.getElementById('cp'+i).className='cpd'+(i<classicPin.length?' on':'');
+}
+function verifyClassicPin() {
+  const arr=classicPin.split('').map(Number);
+  if (arr.every((d,i)=>d===CORRECT_PIN[i])) {
+    speak('PIN correct! Going to review.',true);
+    setTimeout(()=>goScreen('scReview'),800);
+  } else {
+    speak('Wrong PIN. Try again.',true);
+    setTimeout(()=>{ classicPin=''; updateClassicDots(); },1200);
+  }
+}
+
+/* ─────────────────── REVIEW ─────────────────── */
+function populateReview() {
+  const amt = parseInt(amountStr)||0;
+  document.getElementById('revAmt').textContent = '₹'+amt.toLocaleString('en-IN');
+  document.getElementById('revTo').textContent = 'Sending to '+selectedContact.name;
+  document.getElementById('revRec').textContent = selectedContact.name;
+  document.getElementById('revUpi').textContent = selectedContact.upi;
+  document.getElementById('revTime').textContent = new Date().toLocaleString('en-IN',{dateStyle:'medium',timeStyle:'short'});
+  speak(`Review payment. ${amt} rupees to ${selectedContact.name}. Say confirm to pay, or say cancel to go back.`, true);
+}
+
+/* ─────────────────── PAYMENT ─────────────────── */
+function doPayment() {
+  const btn = document.getElementById('payFinalBtn');
+  btn.disabled=true; btn.textContent='Processing…';
+  speak('Processing payment.',true);
+  setTimeout(()=>{
+    const amt = parseInt(amountStr)||0;
+    balance -= amt;
+    document.getElementById('homeBal').textContent='₹'+balance.toLocaleString('en-IN');
+    const txnId = 'VP'+Date.now().toString().slice(-8);
+    const timeStr = new Date().toLocaleString('en-IN',{dateStyle:'medium',timeStyle:'short'});
+    TXNS.unshift({
+      id:txnId, name:selectedContact.name, ini:selectedContact.ini,
+      bg:selectedContact.bg, col:selectedContact.col,
+      amt:-amt, type:'dr', note:'Payment', date:'Just now'
+    });
+    renderHome(); renderHistory();
+    document.getElementById('sucSub').textContent = '₹'+amt.toLocaleString('en-IN')+' sent to '+selectedContact.name+'!';
+    document.getElementById('sucTo').textContent = selectedContact.name;
+    document.getElementById('sucAmt').textContent = '₹'+amt.toLocaleString('en-IN');
+    document.getElementById('sucTxn').textContent = txnId;
+    document.getElementById('sucTime').textContent = timeStr;
+    goScreen('scSuccess');
+    speak(`Payment successful! ${amt} rupees sent to ${selectedContact.name}. Transaction ID: ${txnId}. Say home to go back.`,true);
+    btn.disabled=false; btn.textContent='🔒 Confirm & Pay';
+  },1800);
+}
+
+/* ─────────────────── UTILITIES ─────────────────── */
+function filterH(type,el) {
+  document.querySelectorAll('.fpill').forEach(p=>{p.classList.remove('on');p.setAttribute('aria-pressed','false')});
+  el.classList.add('on'); el.setAttribute('aria-pressed','true');
+  const filtered = type==='all'?TXNS:TXNS.filter(t=>t.type===type);
+  document.getElementById('histList').innerHTML = filtered.map(txnHTML).join('');
+  speak(`Showing ${type==='all'?'all':type==='dr'?'sent':'received'} transactions.`,true);
+}
+
+function showReceive() {
+  toast('📱 arjun.kumar@voicepay');
+  speak('Your UPI ID is arjun dot kumar at voicepay. Share this with the sender.',true);
+}
+function shareReceipt() {
+  if (navigator.share) navigator.share({title:'VoicePay Receipt',text:'Payment successful!'}).catch(()=>{});
+  else toast('📋 Receipt ready to share');
+}
+
+let _toastT;
+function toast(msg) {
+  const el=document.getElementById('toast'); el.textContent=msg; el.classList.add('show');
+  clearTimeout(_toastT); _toastT=setTimeout(()=>el.classList.remove('show'),2400);
+}
+
+/* ─────────────────── BOOT ─────────────────── */
+window.addEventListener('DOMContentLoaded',()=>{
+  renderHome();
+  renderFreq();
+  filterContacts('');
+  renderHistory();
+
+  // Load digit recognition model in background
+  loadDigitModel().then(ok => {
+    if (ok) console.log('Digit model ready for inference');
+    else console.warn('Digit model not available — handwriting PIN disabled');
+  });
+
+  // SPLASH → then auto-start voice
+  setTimeout(()=>{
+    const spl=document.getElementById('splash');
+    spl.style.opacity='0';
+    setTimeout(()=>{
+      spl.style.display='none';
+      // short delay then begin voice
+      setVbState('idle','Requesting microphone access…');
+      speak('Welcome to VoicePay. The app is always listening. Say pay 500 to Sara to start a payment, or say check balance.', false);
+      // Start voice after TTS finishes
+      const waitTTS = setInterval(()=>{
+        if(!ttsBusy){ clearInterval(waitTTS); initVoice(); }
+      },200);
+    },500);
+  },2200);
+});
+
+/* keyboard shortcut: M = mic, Esc = back */
+document.addEventListener('keydown',e=>{
+  if(e.key==='Escape') handleBack();
+});
+</script>
+</body>
+</html>
