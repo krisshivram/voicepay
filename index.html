@@ -1589,7 +1589,12 @@ async function loadDigitModel() {
   }
   try {
     updateModelStatus();
-    digitModel = await tf.loadLayersModel('digit_model/model.json');
+    try {
+      digitModel = await tf.loadLayersModel('digit_model/model.json');
+    } catch (err) {
+      console.warn('Failed to load from digit_model/ folder, trying root...');
+      digitModel = await tf.loadLayersModel('model.json');
+    }
     console.log('Digit recognition model loaded successfully');
     updateModelStatus();
     return true;
