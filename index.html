@@ -425,6 +425,13 @@ body.tap-hov #cur{width:60px;height:60px;background:var(--accent);opacity:.5}
 #qrScannerContainer{
   width:100%;height:100%;position:absolute;inset:0;
   background:#000;
+  display:flex !important;
+  align-items:center !important;
+  justify-content:center !important;
+  overflow:hidden;
+}
+#qrScannerContainer > * {
+  margin:auto !important;
 }
 #qrScannerContainer video {
   width:100% !important;
